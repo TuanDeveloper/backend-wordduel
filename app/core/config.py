@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     SECRET_KEY: str 
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
+    REDIS_URL: str = "redis://localhost:6379/0"
 
     # Cách cấu hình mới của Pydantic v2
     model_config = SettingsConfigDict(

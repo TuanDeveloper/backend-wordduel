@@ -1,16 +1,13 @@
-from jose import JWTError
-from jose import jwt
-from alembic.util import status
-from fastapi import HTTPException
-from sqlalchemy.orm import Session
+from jose import JWTError, jwt
+from fastapi import HTTPException, status, Depends
 from fastapi.security import OAuth2PasswordBearer
-from fastapi import Depends
-from app.db.database import get_db
-from app.core.security import verify_password, create_access_token
+from sqlalchemy.orm import Session
+
+from app.dependencies.database import get_db
 from app.models.user import User
 from app.core.config import settings
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login")
 
 def get_current_user(
     db: Session = Depends(get_db),
