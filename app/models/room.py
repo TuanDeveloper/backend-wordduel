@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, UniqueConstraint, JSON
 from sqlalchemy.orm import relationship
 
 from app.db.base import Base
@@ -12,6 +12,10 @@ class Room(Base):
     code = Column(String(10), unique=True, index=True, nullable=False)  # Mã PIN phòng (vd: WDUEL1)
     host_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     word_set_id = Column(Integer, ForeignKey("word_sets.id"), nullable=False)
+    word_count = Column(Integer, nullable=True)
+    time_per_question = Column(Integer, nullable=True)
+    question_count = Column(Integer, nullable=True)
+    question_word_ids = Column(JSON, nullable=True)
     status = Column(String(20), default="waiting", nullable=False)  # waiting, playing, finished
     created_at = Column(DateTime, default=datetime.utcnow)
     finished_at = Column(DateTime, nullable=True)
@@ -46,7 +50,7 @@ class RoomPlayer(Base):
 class Submission(Base):
     __tablename__ = "submissions"
     __table_args__ = (
-        UniqueConstraint("room_id", "user_id", "word_id", name="uq_submissions_room_user_word"),
+        UniqueConstraint("room_id", "user_id", "question_index", name="uq_submissions_room_user_question"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -57,6 +61,7 @@ class Submission(Base):
     )
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     word_id = Column(Integer, ForeignKey("words.id"), nullable=False)
+    question_index = Column(Integer, nullable=False, default=0, server_default="0")
     submitted_answer = Column(String(255), nullable=False)
     is_correct = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)

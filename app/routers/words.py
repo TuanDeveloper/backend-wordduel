@@ -48,6 +48,8 @@ def get_word_set(
     word_set = word_service.get_word_set_by_id(db, word_set_id=word_set_id)
     if not word_set:
         raise NotFoundError(message="Không tìm thấy bộ từ vựng")
+    if word_set.is_hidden:
+        raise NotFoundError(message="Không tìm thấy bộ từ vựng")
     active_room = (
         db.query(Room.id)
         .filter(Room.word_set_id == word_set_id, Room.status.in_(["waiting", "playing"]))

@@ -10,6 +10,7 @@ def get_word_sets(db: Session, skip: int = 0, limit: int = 50) -> list[tuple[Wor
     return (
         db.query(WordSet, func.count(Word.id).label("word_count"))
         .outerjoin(Word, Word.word_set_id == WordSet.id)
+        .filter(WordSet.is_hidden.is_(False))
         .group_by(WordSet.id)
         .offset(skip)
         .limit(limit)
@@ -40,6 +41,7 @@ def create_word_set(db: Session, word_set_in: WordSetCreate, creator_id: int) ->
                 term=w.term,
                 definition=w.definition,
                 example=w.example,
+                context_sentence=w.context_sentence,
             )
             db_word_set.words.append(db_word)
 
@@ -94,6 +96,7 @@ def create_word(db: Session, word_set_id: int, word_in: WordCreate, user_id: int
         term=word_in.term,
         definition=word_in.definition,
         example=word_in.example,
+        context_sentence=word_in.context_sentence,
     )
     db.add(db_word)
     db.commit()
@@ -117,6 +120,8 @@ def update_word(db: Session, word_id: int, word_in: WordUpdate, user_id: int) ->
         db_word.definition = word_in.definition
     if word_in.example is not None:
         db_word.example = word_in.example
+    if "context_sentence" in word_in.model_fields_set:
+        db_word.context_sentence = word_in.context_sentence
 
     db.commit()
     db.refresh(db_word)

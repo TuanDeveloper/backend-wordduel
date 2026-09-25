@@ -42,6 +42,7 @@ def _room_players(room: Room) -> list[dict]:
             "score": player.score,
             "is_ready": player.is_ready,
             "is_host": player.user_id == room.host_id,
+            "is_host": player.user_id == room.host_id,
         }
         for player in room.players
     ]
@@ -85,8 +86,47 @@ async def join_room(
     current_user: User = Depends(get_current_user),
 ) -> ResponseSchema[RoomResponse]:
     room = room_service.join_room(db, code=code, user_id=current_user.id)
-    await manager.broadcast(code, {"event": "player_joined", "players": _room_players(room)})
+    await manager.broadcast(code, {"event": "player_joined", "players": _room_players(room), "host_id": room.host_id})
     return ResponseSchema(data=room, message="Tham gia phòng chơi thành công")
+
+
+@router.post("/{code}/leave", response_model=ResponseSchema[dict])
+async def leave_room(
+    code: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ResponseSchema[dict]:
+    room = db.query(Room).filter(Room.code == code).with_for_update().populate_existing().first()
+    if not room:
+        raise BadRequestError("Phòng chơi không còn tồn tại")
+    player = _require_room_member(db, room, current_user.id)
+    was_host = room.host_id == current_user.id
+    db.delete(player)
+    db.flush()
+    remaining = (
+        db.query(RoomPlayer)
+        .filter(RoomPlayer.room_id == room.id)
+        .order_by(RoomPlayer.joined_at.asc(), RoomPlayer.id.asc())
+        .all()
+    )
+    if not remaining:
+        db.delete(room)
+        db.commit()
+        await manager.broadcast(code, {"event": "room_closed", "reason": "empty", "players": []})
+        return ResponseSchema(data={"left": True, "closed": True}, message="Đã đóng phòng trống")
+
+    if was_host:
+        room.host_id = remaining[0].user_id
+    db.commit()
+    room = room_service.get_room_by_code(db, code)
+    await manager.broadcast(code, {
+        "event": "player_left",
+        "user_id": current_user.id,
+        "username": current_user.username,
+        "host_id": room.host_id,
+        "players": _room_players(room),
+    })
+    return ResponseSchema(data={"left": True, "closed": False, "host_id": room.host_id}, message="Đã rời phòng")
 
 
 @router.post("/{code}/ready", response_model=ResponseSchema[dict])
@@ -134,6 +174,7 @@ async def submit_room_answer(
         user_id=current_user.id,
         word_id=submit_in.word_id,
         submitted_answer=submit_in.submitted_answer,
+        question_index=submit_in.question_index,
     )
     await manager.broadcast(code, game_service.public_progress_update(feedback, current_user.id))
     return ResponseSchema(data=feedback, message="Nộp câu trả lời thành công")
@@ -172,7 +213,7 @@ async def handle_websocket_connection(websocket: WebSocket, code: str, db: Sessi
         return
 
     user = db.query(User).filter(User.id == user_id).first()
-    if not user:
+    if not user or not user.is_active:
         await websocket.close(code=1008, reason="User not found")
         return
 
@@ -198,6 +239,10 @@ async def handle_websocket_connection(websocket: WebSocket, code: str, db: Sessi
 
         while True:
             raw_message = await websocket.receive_text()
+            db.refresh(user)
+            if not user.is_active:
+                await websocket.close(code=1008, reason="Account is disabled")
+                break
             if len(raw_message) > 8192:
                 await manager.send_personal(websocket, {"event": "error", "message": "Tin nhắn quá dài"})
                 continue
@@ -245,8 +290,12 @@ async def handle_websocket_connection(websocket: WebSocket, code: str, db: Sessi
                         or len(answer) > 255
                     ):
                         raise ValueError("Invalid answer payload")
+                    question_index = message.get("question_index", 0)
+                    if not isinstance(question_index, int) or isinstance(question_index, bool):
+                        raise ValueError("Invalid question index")
                     feedback = game_service.submit_answer(
-                        db, room_code=code, user_id=user_id, word_id=word_id, submitted_answer=answer
+                        db, room_code=code, user_id=user_id, word_id=word_id,
+                        submitted_answer=answer, question_index=question_index,
                     )
                     await manager.broadcast(code, game_service.public_progress_update(feedback, user_id))
                     await manager.send_personal(websocket, feedback)

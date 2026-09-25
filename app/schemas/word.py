@@ -5,6 +5,7 @@ class WordBase(BaseModel):
     term: str = Field(min_length=1, max_length=100)
     definition: str = Field(min_length=1, max_length=255)
     example: str | None = Field(default=None, max_length=500)
+    context_sentence: str | None = Field(default=None, max_length=1000)
 
 
 class WordCreate(WordBase):
@@ -15,6 +16,7 @@ class WordUpdate(BaseModel):
     term: str | None = Field(default=None, min_length=1, max_length=100)
     definition: str | None = Field(default=None, min_length=1, max_length=255)
     example: str | None = Field(default=None, max_length=500)
+    context_sentence: str | None = Field(default=None, max_length=1000)
 
 
 class WordResponse(WordBase):
@@ -30,7 +32,7 @@ class WordSetBase(BaseModel):
 
 
 class WordSetCreate(WordSetBase):
-    words: list[WordCreate] = Field(default_factory=list, max_length=100)
+    words: list[WordCreate] = Field(default_factory=list, max_length=500)
 
 
 class WordSetUpdate(BaseModel):

@@ -3,10 +3,11 @@ import string
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import func
 
 from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
 from app.models.room import Room, RoomPlayer
-from app.models.word import WordSet
+from app.models.word import Word, WordSet
 from app.schemas.room import RoomCreate
 
 
@@ -33,9 +34,14 @@ def get_room_by_code(db: Session, code: str) -> Room:
 
 
 def create_room(db: Session, room_in: RoomCreate, host_id: int) -> Room:
-    word_set = db.query(WordSet).filter(WordSet.id == room_in.word_set_id).first()
+    word_set = db.query(WordSet).filter(WordSet.id == room_in.word_set_id, WordSet.is_hidden.is_(False)).first()
     if not word_set:
         raise NotFoundError("Bộ từ vựng không tồn tại")
+    available_words = db.query(func.count(Word.id)).filter(Word.word_set_id == word_set.id).scalar() or 0
+    if not available_words:
+        raise BadRequestError("Bộ từ vựng chưa có từ nào")
+    word_count = min(room_in.word_count or available_words, available_words, 500)
+    question_count = room_in.question_count or word_count
 
     # The unique index remains authoritative if another process picks the same code.
     for _ in range(5):
@@ -44,6 +50,9 @@ def create_room(db: Session, room_in: RoomCreate, host_id: int) -> Room:
             code=code,
             host_id=host_id,
             word_set_id=room_in.word_set_id,
+            word_count=word_count,
+            time_per_question=room_in.time_per_question,
+            question_count=question_count,
             status="waiting",
         )
         db.add(room)

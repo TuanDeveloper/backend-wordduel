@@ -16,7 +16,7 @@ from app.routers.rooms import handle_websocket_connection
 from app.websockets.connection_manager import manager
 
 logger = logging.getLogger(__name__)
-CURRENT_SCHEMA_REVISION = "943c0ad1f6e2"
+CURRENT_SCHEMA_REVISION = "a63f9d7b2c10"
 
 
 def _assert_schema_current(connection) -> None:
@@ -52,7 +52,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
 

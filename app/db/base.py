@@ -6,3 +6,4 @@ Base = declarative_base()
 import app.models.user  # noqa: F401
 import app.models.word  # noqa: F401
 import app.models.room  # noqa: F401
+import app.models.learning  # noqa: F401

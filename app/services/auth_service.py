@@ -38,11 +38,11 @@ def create_user(db: Session, user: UserCreate) -> User:
 
 def authenticate_user(db: Session, username: str, password: str) -> User | None:
     user = db.query(User).filter(User.username == username).first()
-    if not user or not verify_password(password, user.password_hash):
+    if not user or not user.is_active or not verify_password(password, user.password_hash):
         return None
     return user
 
 
 def login_for_access_token(user: User) -> TokenResponse:
-    access_token = create_access_token(data={"sub": str(user.id)})
+    access_token = create_access_token(data={"sub": str(user.id), "role": user.role})
     return TokenResponse(access_token=access_token, token_type="bearer")
