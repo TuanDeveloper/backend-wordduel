@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.db.base import Base
@@ -25,9 +25,14 @@ class Room(Base):
 
 class RoomPlayer(Base):
     __tablename__ = "room_players"
+    __table_args__ = (UniqueConstraint("room_id", "user_id", name="uq_room_players_room_user"),)
 
     id = Column(Integer, primary_key=True, index=True)
-    room_id = Column(Integer, ForeignKey("rooms.id"), nullable=False)
+    room_id = Column(
+        Integer,
+        ForeignKey("rooms.id", name="fk_room_players_room_id_rooms", ondelete="CASCADE"),
+        nullable=False,
+    )
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     score = Column(Integer, default=0, nullable=False)  # Số câu đúng
     is_ready = Column(Boolean, default=False, nullable=False)
@@ -40,9 +45,16 @@ class RoomPlayer(Base):
 
 class Submission(Base):
     __tablename__ = "submissions"
+    __table_args__ = (
+        UniqueConstraint("room_id", "user_id", "word_id", name="uq_submissions_room_user_word"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
-    room_id = Column(Integer, ForeignKey("rooms.id"), nullable=False)
+    room_id = Column(
+        Integer,
+        ForeignKey("rooms.id", name="fk_submissions_room_id_rooms", ondelete="CASCADE"),
+        nullable=False,
+    )
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     word_id = Column(Integer, ForeignKey("words.id"), nullable=False)
     submitted_answer = Column(String(255), nullable=False)

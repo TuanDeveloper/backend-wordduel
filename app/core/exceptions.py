@@ -1,14 +1,16 @@
+from typing import Any
+
 from fastapi import HTTPException, status
 
 class BaseAPIException(HTTPException):
-    def __init__(self, status_code: int, error_code: str, message: str, details: any = None):
+    def __init__(self, status_code: int, error_code: str, message: str, details: Any = None):
         super().__init__(status_code=status_code, detail=message)
         self.error_code = error_code
         self.message = message
         self.details = details
 
 class BadRequestError(BaseAPIException):
-    def __init__(self, message: str = "Dữ liệu đầu vào không hợp lệ", details: any = None):
+    def __init__(self, message: str = "Dữ liệu đầu vào không hợp lệ", details: Any = None):
         super().__init__(
             status_code=status.HTTP_400_BAD_REQUEST,
             error_code="BAD_REQUEST",
@@ -49,7 +51,7 @@ class ConflictError(BaseAPIException):
         )
 
 class InternalServerError(BaseAPIException):
-    def __init__(self, message: str = "Lỗi hệ thống", details: any = None):
+    def __init__(self, message: str = "Lỗi hệ thống", details: Any = None):
         super().__init__(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             error_code="INTERNAL_SERVER_ERROR",

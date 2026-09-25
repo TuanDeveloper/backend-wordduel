@@ -1,20 +1,50 @@
 import json
-from typing import Any
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, Query, status
-from jose import jwt, JWTError
+import logging
+
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, status
+from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
-from app.dependencies.database import get_db
-from app.dependencies.auth import get_current_user
-from app.models.user import User
-from app.models.room import Room, RoomPlayer
-from app.services import room_service, game_service
-from app.schemas.room import RoomCreate, RoomResponse, SubmitRequest
-from app.schemas.response import ResponseSchema
-from app.websockets.connection_manager import manager
 from app.core.config import settings
+from app.core.exceptions import BaseAPIException, BadRequestError, ForbiddenError
+from app.dependencies.auth import get_current_user
+from app.dependencies.database import get_db
+from app.models.room import Room, RoomPlayer
+from app.models.user import User
+from app.schemas.response import ResponseSchema
+from app.schemas.room import RoomCreate, RoomResponse, SubmitRequest
+from app.services import game_service, room_service
+from app.websockets.connection_manager import manager
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+def _require_room_member(db: Session, room: Room, user_id: int) -> RoomPlayer:
+    player = (
+        db.query(RoomPlayer)
+        .filter(RoomPlayer.room_id == room.id, RoomPlayer.user_id == user_id)
+        .populate_existing()
+        .first()
+    )
+    if not player:
+        raise ForbiddenError("Bạn không phải thành viên của phòng")
+    return player
+
+
+def _room_players(room: Room) -> list[dict]:
+    return [
+        {
+            "id": player.id,
+            "room_id": room.id,
+            "user_id": player.user_id,
+            "user": {"username": player.user.username if player.user else f"Player {player.user_id}"},
+            "score": player.score,
+            "is_ready": player.is_ready,
+            "is_host": player.user_id == room.host_id,
+        }
+        for player in room.players
+    ]
 
 
 @router.post("", response_model=ResponseSchema[RoomResponse], status_code=status.HTTP_201_CREATED)
@@ -23,7 +53,6 @@ def create_room(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ResponseSchema[RoomResponse]:
-    """Tạo phòng chơi mới và sinh mã phòng ngẫu nhiên."""
     room = room_service.create_room(db, room_in=room_in, host_id=current_user.id)
     return ResponseSchema(data=room, message="Tạo phòng chơi thành công")
 
@@ -34,19 +63,29 @@ def get_room(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ResponseSchema[RoomResponse]:
-    """Lấy thông tin chi tiết phòng chơi theo mã code."""
     room = room_service.get_room_by_code(db, code=code)
+    _require_room_member(db, room, current_user.id)
     return ResponseSchema(data=room, message="Lấy thông tin phòng thành công")
 
 
+@router.get("/{code}/game-state", response_model=ResponseSchema[dict])
+def get_game_state(
+    code: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ResponseSchema[dict]:
+    state = game_service.get_game_state(db, room_code=code, user_id=current_user.id)
+    return ResponseSchema(data=state, message="Lấy trạng thái trận đấu thành công")
+
+
 @router.post("/{code}/join", response_model=ResponseSchema[RoomResponse])
-def join_room(
+async def join_room(
     code: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ResponseSchema[RoomResponse]:
-    """Tham gia vào phòng chơi theo mã code."""
     room = room_service.join_room(db, code=code, user_id=current_user.id)
+    await manager.broadcast(code, {"event": "player_joined", "players": _room_players(room)})
     return ResponseSchema(data=room, message="Tham gia phòng chơi thành công")
 
 
@@ -56,20 +95,19 @@ async def toggle_ready(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ResponseSchema[dict]:
-    """Toggle trạng thái ready của người chơi trong phòng."""
     room = room_service.get_room_by_code(db, code=code)
-    player = db.query(RoomPlayer).filter(RoomPlayer.room_id == room.id, RoomPlayer.user_id == current_user.id).first()
-    if player:
-        player.is_ready = not player.is_ready
-        db.commit()
-    
-    # Broadcast cập nhật
+    player = _require_room_member(db, room, current_user.id)
+    if room.status != "waiting":
+        raise BadRequestError("Chỉ có thể đổi trạng thái sẵn sàng khi phòng đang chờ")
+    player.is_ready = not player.is_ready
+    db.commit()
     await manager.broadcast(code, {
         "event": "player_ready",
         "user_id": current_user.id,
-        "is_ready": player.is_ready if player else False,
+        "is_ready": player.is_ready,
+        "players": _room_players(room),
     })
-    return ResponseSchema(data={"is_ready": player.is_ready if player else False}, message="Cập nhật trạng thái sẵn sàng")
+    return ResponseSchema(data={"is_ready": player.is_ready}, message="Cập nhật trạng thái sẵn sàng")
 
 
 @router.post("/{code}/start", response_model=ResponseSchema[dict])
@@ -78,9 +116,7 @@ async def start_room_game(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ResponseSchema[dict]:
-    """Host bắt đầu trận đấu."""
-    game_data = game_service.start_game(db, room_code=code)
-    # Broadcast qua WebSocket
+    game_data = game_service.start_game(db, room_code=code, user_id=current_user.id)
     await manager.broadcast(code, game_data)
     return ResponseSchema(data=game_data, message="Bắt đầu trận đấu thành công")
 
@@ -92,17 +128,15 @@ async def submit_room_answer(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ResponseSchema[dict]:
-    """Nộp câu trả lời cho một câu hỏi."""
-    progress_data = game_service.submit_answer(
+    feedback = game_service.submit_answer(
         db,
         room_code=code,
         user_id=current_user.id,
         word_id=submit_in.word_id,
         submitted_answer=submit_in.submitted_answer,
     )
-    # Broadcast cập nhật điểm / tiến độ
-    await manager.broadcast(code, progress_data)
-    return ResponseSchema(data=progress_data, message="Nộp câu trả lời thành công")
+    await manager.broadcast(code, game_service.public_progress_update(feedback, current_user.id))
+    return ResponseSchema(data=feedback, message="Nộp câu trả lời thành công")
 
 
 @router.post("/{code}/finish", response_model=ResponseSchema[dict])
@@ -111,102 +145,137 @@ async def finish_room_game(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ResponseSchema[dict]:
-    """Kết thúc ván đấu và tính kết quả."""
-    finish_data = game_service.finish_game(db, room_code=code)
+    finish_data = game_service.finish_game(db, room_code=code, user_id=current_user.id)
     await manager.broadcast(code, finish_data)
     return ResponseSchema(data=finish_data, message="Kết thúc ván đấu")
 
 
-async def handle_websocket_connection(websocket: WebSocket, code: str, db: Session):
-    token = websocket.query_params.get("token")
-    user_id = None
-    username = "Anonymous"
+def _websocket_token(websocket: WebSocket) -> str | None:
+    offered_protocols = websocket.headers.get("sec-websocket-protocol", "")
+    for protocol in (part.strip() for part in offered_protocols.split(",")):
+        if protocol.startswith("bearer."):
+            return protocol.removeprefix("bearer.")
+    return None
 
-    if token:
-        try:
-            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-            user_id = int(payload.get("sub"))
-            user = db.query(User).filter(User.id == user_id).first()
-            if user:
-                username = user.username
-        except (JWTError, ValueError, Exception):
-            pass
 
-    if not user_id:
-        # Nếu không có token hợp lệ, tạm gán user_id từ timestamp
-        user_id = int(websocket.headers.get("sec-websocket-key", "0")[:5], 16) % 100000
-
-    await manager.connect(websocket, code, user_id)
-
-    # Lấy thông tin phòng và người chơi
-    room = db.query(Room).filter(Room.code == code).first()
-    players_info = []
-    if room:
-        for p in room.players:
-            players_info.append({
-                "user_id": p.user_id,
-                "username": p.user.username if p.user else f"Player {p.user_id}",
-                "score": p.score,
-                "is_ready": p.is_ready,
-                "is_host": p.user_id == room.host_id,
-            })
-
-    # Broadcast người chơi mới tham gia
-    await manager.broadcast(code, {
-        "event": "player_joined",
-        "user_id": user_id,
-        "username": username,
-        "players": players_info,
-    })
+async def handle_websocket_connection(websocket: WebSocket, code: str, db: Session) -> None:
+    token = _websocket_token(websocket)
+    if not token:
+        await websocket.close(code=1008, reason="Authentication required")
+        return
 
     try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        user_id = int(payload.get("sub"))
+    except (JWTError, TypeError, ValueError):
+        await websocket.close(code=1008, reason="Invalid authentication token")
+        return
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        await websocket.close(code=1008, reason="User not found")
+        return
+
+    room = db.query(Room).filter(Room.code == code).first()
+    if not room:
+        await websocket.close(code=1008, reason="Room not found")
+        return
+    try:
+        player = _require_room_member(db, room, user_id)
+    except BaseAPIException:
+        await websocket.close(code=1008, reason="Room membership required")
+        return
+    username = player.user.username if player.user else user.username
+
+    await manager.connect(websocket, code, user_id, subprotocol="wordduel")
+    try:
+        await manager.broadcast(code, {
+            "event": "player_joined",
+            "user_id": user_id,
+            "username": username,
+            "players": _room_players(room),
+        })
+
         while True:
-            text = await websocket.receive_text()
+            raw_message = await websocket.receive_text()
+            if len(raw_message) > 8192:
+                await manager.send_personal(websocket, {"event": "error", "message": "Tin nhắn quá dài"})
+                continue
             try:
-                msg = json.loads(text)
-                event = msg.get("event") or msg.get("type")
+                message = json.loads(raw_message)
+                if not isinstance(message, dict):
+                    raise ValueError("Expected a JSON object")
+                event = message.get("event") or message.get("type")
 
                 if event == "chat":
-                    await manager.broadcast(code, {
-                        "event": "chat",
-                        "user_id": user_id,
-                        "username": username,
-                        "message": msg.get("message", ""),
-                    })
+                    chat_text = message.get("message", "")
+                    if isinstance(chat_text, str) and len(chat_text) <= 1000:
+                        await manager.broadcast(code, {
+                            "event": "chat",
+                            "user_id": user_id,
+                            "username": username,
+                            "message": chat_text,
+                        })
                 elif event == "ready":
-                    is_ready = bool(msg.get("is_ready", True))
-                    if room:
-                        rp = db.query(RoomPlayer).filter(RoomPlayer.room_id == room.id, RoomPlayer.user_id == user_id).first()
-                        if rp:
-                            rp.is_ready = is_ready
-                            db.commit()
+                    db.refresh(room)
+                    room_player = _require_room_member(db, room, user_id)
+                    if room.status != "waiting":
+                        raise BadRequestError("Chỉ có thể đổi trạng thái sẵn sàng khi phòng đang chờ")
+                    ready_value = message.get("is_ready", True)
+                    if not isinstance(ready_value, bool):
+                        raise BadRequestError("Trạng thái sẵn sàng không hợp lệ")
+                    room_player.is_ready = ready_value
+                    db.commit()
                     await manager.broadcast(code, {
                         "event": "player_ready",
                         "user_id": user_id,
-                        "is_ready": is_ready,
+                        "is_ready": room_player.is_ready,
+                        "players": _room_players(room),
                     })
                 elif event == "start":
-                    game_data = game_service.start_game(db, room_code=code)
+                    game_data = game_service.start_game(db, room_code=code, user_id=user_id)
                     await manager.broadcast(code, game_data)
                 elif event == "submit":
-                    word_id = msg.get("word_id")
-                    answer = msg.get("answer", "")
-                    progress_data = game_service.submit_answer(
+                    word_id = message.get("word_id")
+                    answer = message.get("answer", "")
+                    if (
+                        not isinstance(word_id, int)
+                        or isinstance(word_id, bool)
+                        or not isinstance(answer, str)
+                        or len(answer) > 255
+                    ):
+                        raise ValueError("Invalid answer payload")
+                    feedback = game_service.submit_answer(
                         db, room_code=code, user_id=user_id, word_id=word_id, submitted_answer=answer
                     )
-                    await manager.broadcast(code, progress_data)
+                    await manager.broadcast(code, game_service.public_progress_update(feedback, user_id))
+                    await manager.send_personal(websocket, feedback)
                 elif event == "finish":
-                    finish_data = game_service.finish_game(db, room_code=code)
+                    finish_data = game_service.finish_game(db, room_code=code, user_id=user_id)
                     await manager.broadcast(code, finish_data)
-            except Exception as e:
-                await manager.send_personal(websocket, {"event": "error", "message": str(e)})
+            except BaseAPIException as exc:
+                await manager.send_personal(websocket, {"event": "error", "message": exc.message})
+            except (ValueError, TypeError, json.JSONDecodeError):
+                await manager.send_personal(websocket, {"event": "error", "message": "Dữ liệu gửi lên không hợp lệ"})
+            except Exception:
+                logger.exception("Failed to process WebSocket event in room %s", code)
+                await manager.send_personal(websocket, {"event": "error", "message": "Không thể xử lý yêu cầu"})
     except WebSocketDisconnect:
+        pass
+    finally:
         manager.disconnect(websocket, code)
-        await manager.broadcast(code, {
-            "event": "player_left",
-            "user_id": user_id,
-            "username": username,
-        })
+        try:
+            db.expire_all()
+            fresh_room = db.query(Room).filter(Room.code == code).first()
+            if fresh_room:
+                await manager.broadcast(code, {
+                    "event": "player_left",
+                    "user_id": user_id,
+                    "username": username,
+                    "players": _room_players(fresh_room),
+                })
+        except Exception:
+            logger.exception("Failed to notify room %s about WebSocket disconnect", code)
 
 
 @router.websocket("/ws/{code}")
@@ -214,5 +283,5 @@ async def websocket_endpoint(
     websocket: WebSocket,
     code: str,
     db: Session = Depends(get_db),
-):
+) -> None:
     await handle_websocket_connection(websocket, code, db)

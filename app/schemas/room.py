@@ -1,7 +1,11 @@
-from typing import Optional, List
 from datetime import datetime
-from pydantic import BaseModel, ConfigDict
-from app.schemas.user import UserResponse
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class RoomPlayerUserResponse(BaseModel):
+    username: str
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class RoomPlayerResponse(BaseModel):
@@ -10,19 +14,19 @@ class RoomPlayerResponse(BaseModel):
     user_id: int
     score: int
     is_ready: bool
-    joined_at: Optional[datetime] = None
-    user: Optional[UserResponse] = None
+    joined_at: datetime | None = None
+    user: RoomPlayerUserResponse | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class RoomCreate(BaseModel):
-    word_set_id: int
+    word_set_id: int = Field(gt=0)
 
 
 class SubmitRequest(BaseModel):
-    word_id: int
-    submitted_answer: str
+    word_id: int = Field(gt=0)
+    submitted_answer: str = Field(max_length=255)
 
 
 class RoomResponse(BaseModel):
@@ -31,8 +35,8 @@ class RoomResponse(BaseModel):
     host_id: int
     word_set_id: int
     status: str
-    created_at: Optional[datetime] = None
-    finished_at: Optional[datetime] = None
-    players: List[RoomPlayerResponse] = []
+    created_at: datetime | None = None
+    finished_at: datetime | None = None
+    players: list[RoomPlayerResponse] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)

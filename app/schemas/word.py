@@ -1,11 +1,10 @@
-from typing import Optional, List
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class WordBase(BaseModel):
-    term: str
-    definition: str
-    example: Optional[str] = None
+    term: str = Field(min_length=1, max_length=100)
+    definition: str = Field(min_length=1, max_length=255)
+    example: str | None = Field(default=None, max_length=500)
 
 
 class WordCreate(WordBase):
@@ -13,9 +12,9 @@ class WordCreate(WordBase):
 
 
 class WordUpdate(BaseModel):
-    term: Optional[str] = None
-    definition: Optional[str] = None
-    example: Optional[str] = None
+    term: str | None = Field(default=None, min_length=1, max_length=100)
+    definition: str | None = Field(default=None, min_length=1, max_length=255)
+    example: str | None = Field(default=None, max_length=500)
 
 
 class WordResponse(WordBase):
@@ -26,23 +25,31 @@ class WordResponse(WordBase):
 
 
 class WordSetBase(BaseModel):
-    title: str
-    description: Optional[str] = None
+    title: str = Field(min_length=1, max_length=100)
+    description: str | None = Field(default=None, max_length=255)
 
 
 class WordSetCreate(WordSetBase):
-    words: List[WordCreate] = []
+    words: list[WordCreate] = Field(default_factory=list, max_length=100)
 
 
 class WordSetUpdate(BaseModel):
-    title: Optional[str] = None
-    description: Optional[str] = None
+    title: str | None = Field(default=None, min_length=1, max_length=100)
+    description: str | None = Field(default=None, max_length=255)
 
 
 class WordSetResponse(WordSetBase):
     id: int
-    creator_id: Optional[int] = None
-    words: List[WordResponse] = []
+    creator_id: int | None = None
+    words: list[WordResponse] = Field(default_factory=list)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WordSetSummaryResponse(WordSetBase):
+    id: int
+    creator_id: int | None = None
+    word_count: int = 0
 
     model_config = ConfigDict(from_attributes=True)
 

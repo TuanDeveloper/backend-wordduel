@@ -1,10 +1,10 @@
-from typing import List
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.dependencies.database import get_db
 from app.dependencies.auth import get_current_user
 from app.models.user import User
+from app.models.room import Room
 from app.services import word_service
 from app.schemas.word import (
     WordSetCreate,
@@ -13,6 +13,7 @@ from app.schemas.word import (
     WordCreate,
     WordUpdate,
     WordResponse,
+    WordSetSummaryResponse,
 )
 from app.schemas.response import ResponseSchema
 from app.core.exceptions import NotFoundError
@@ -20,16 +21,21 @@ from app.core.exceptions import NotFoundError
 router = APIRouter()
 
 
-@router.get("/word-sets", response_model=ResponseSchema[List[WordSetResponse]])
-@router.get("/words/sets", response_model=ResponseSchema[List[WordSetResponse]])
+@router.get("/word-sets", response_model=ResponseSchema[list[WordSetSummaryResponse]])
+@router.get("/words/sets", response_model=ResponseSchema[list[WordSetSummaryResponse]])
 def get_word_sets(
     db: Session = Depends(get_db),
-    skip: int = 0,
-    limit: int = 100,
-) -> ResponseSchema[List[WordSetResponse]]:
+    skip: int = Query(default=0, ge=0, le=1_000_000),
+    limit: int = Query(default=50, ge=1, le=100),
+) -> ResponseSchema[list[WordSetSummaryResponse]]:
     """Lấy danh sách các bộ từ vựng."""
     word_sets = word_service.get_word_sets(db, skip=skip, limit=limit)
-    return ResponseSchema(data=word_sets, message="Lấy danh sách bộ từ vựng thành công")
+    data = [
+        {"id": word_set.id, "title": word_set.title, "description": word_set.description,
+         "creator_id": word_set.creator_id, "word_count": word_count}
+        for word_set, word_count in word_sets
+    ]
+    return ResponseSchema(data=data, message="Lấy danh sách bộ từ vựng thành công")
 
 
 @router.get("/word-sets/{word_set_id}", response_model=ResponseSchema[WordSetResponse])
@@ -42,6 +48,23 @@ def get_word_set(
     word_set = word_service.get_word_set_by_id(db, word_set_id=word_set_id)
     if not word_set:
         raise NotFoundError(message="Không tìm thấy bộ từ vựng")
+    active_room = (
+        db.query(Room.id)
+        .filter(Room.word_set_id == word_set_id, Room.status.in_(["waiting", "playing"]))
+        .first()
+    )
+    if active_room:
+        # Do not let a room participant fetch the answer list through the word-set API.
+        return ResponseSchema(
+            data={
+                "id": word_set.id,
+                "title": word_set.title,
+                "description": word_set.description,
+                "creator_id": word_set.creator_id,
+                "words": [],
+            },
+            message="Bộ từ đang được dùng trong phòng chơi",
+        )
     return ResponseSchema(data=word_set, message="Lấy chi tiết bộ từ vựng thành công")
 
 

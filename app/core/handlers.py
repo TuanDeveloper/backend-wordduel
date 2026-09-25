@@ -1,8 +1,12 @@
+import logging
+
 from fastapi import Request, status
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from app.core.exceptions import BaseAPIException
 from app.schemas.response import ErrorResponseSchema
+
+logger = logging.getLogger(__name__)
 
 def register_exception_handlers(app):
 
@@ -41,12 +45,18 @@ def register_exception_handlers(app):
 
     @app.exception_handler(Exception)
     async def generic_exception_handler(request: Request, exc: Exception):
+        logger.error(
+            "Unhandled request error: %s %s",
+            request.method,
+            request.url.path,
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content=ErrorResponseSchema(
                 status="error",
                 error_code="INTERNAL_SERVER_ERROR",
                 message="Đã xảy ra lỗi hệ thống không xác định",
-                details=str(exc) # Trong môi trường production nên ẩn đi
+                details=None,
             ).model_dump()
         )

@@ -1,21 +1,28 @@
-from typing import List, Optional
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from app.models.word import WordSet, Word
 from app.schemas.word import WordSetCreate, WordSetUpdate, WordCreate, WordUpdate
 from app.core.exceptions import NotFoundError, ForbiddenError
 
 
-def get_word_sets(db: Session, skip: int = 0, limit: int = 100) -> List[WordSet]:
-    """Lấy danh sách các bộ từ vựng"""
-    return db.query(WordSet).offset(skip).limit(limit).all()
+def get_word_sets(db: Session, skip: int = 0, limit: int = 50) -> list[tuple[WordSet, int]]:
+    """Load only each set and its count; do not serialize every related word."""
+    return (
+        db.query(WordSet, func.count(Word.id).label("word_count"))
+        .outerjoin(Word, Word.word_set_id == WordSet.id)
+        .group_by(WordSet.id)
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
 
 
-def get_word_set_by_id(db: Session, word_set_id: int) -> Optional[WordSet]:
+def get_word_set_by_id(db: Session, word_set_id: int) -> WordSet | None:
     """Lấy chi tiết một bộ từ vựng theo ID"""
     return db.query(WordSet).filter(WordSet.id == word_set_id).first()
 
 
-def get_words_by_set_id(db: Session, word_set_id: int, skip: int = 0, limit: int = 100) -> List[Word]:
+def get_words_by_set_id(db: Session, word_set_id: int, skip: int = 0, limit: int = 100) -> list[Word]:
     """Lấy danh sách từ vựng thuộc về một word set"""
     return db.query(Word).filter(Word.word_set_id == word_set_id).offset(skip).limit(limit).all()
 

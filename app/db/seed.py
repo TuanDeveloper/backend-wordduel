@@ -8,13 +8,16 @@ Bao gồm 6 bộ từ vựng (120 từ chất lượng cao):
   5. Giao Tiếp & Đời Sống Hàng Ngày (Daily Conversation & Life)
   6. Du Lịch & Khám Phá Thế Giới (Travel & World Adventure)
 """
-from typing import List, Dict, Any
+import logging
+from typing import Any
 from sqlalchemy.orm import Session
 from app.db.database import SessionLocal
 from app.models.word import WordSet, Word
 
+logger = logging.getLogger(__name__)
 
-SEED_WORD_SETS: List[Dict[str, Any]] = [
+
+SEED_WORD_SETS: list[dict[str, Any]] = [
     {
         "title": "Oxford 3000 — Từ Vựng Cốt Lõi",
         "description": "20 từ vựng tiếng Anh thông dụng và cốt lõi nhất theo khung chuẩn Oxford",
@@ -705,31 +708,30 @@ def seed_words_data(db: Session, force: bool = False) -> int:
 
 def run_seed_if_empty() -> None:
     """
-    Ham duoc goi tu dong khi khoi chay app:
-    Neu DB chua co bo tu nao, tu dong seed toan bo du lieu mau vao.
+    Ensure all built-in sample sets exist without replacing user data.
     """
     db = SessionLocal()
     try:
         current_sets_count = db.query(WordSet).count()
-        if current_sets_count == 0:
-            print("[Auto-Seed] Database is empty. Seeding initial vocabulary sets...")
-            count = seed_words_data(db)
-            print(f"[Auto-Seed] Successfully seeded {len(SEED_WORD_SETS)} word sets with {count} words!")
-        else:
-            print(f"[Auto-Seed] Database already contains {current_sets_count} word sets.")
-    except Exception as e:
-        print(f"[Auto-Seed] Error while seeding data: {e}")
+        count = seed_words_data(db, force=False)
+        logger.info(
+            "Seed check complete (existing sets: %s, sample sets: %s, words added: %s)",
+            current_sets_count,
+            len(SEED_WORD_SETS),
+            count,
+        )
+    except Exception:
         db.rollback()
+        logger.exception("Failed to seed initial vocabulary")
+        raise
     finally:
         db.close()
 
 
 if __name__ == "__main__":
-    print("--- Starting manual seed script ---")
     session = SessionLocal()
     try:
         total = seed_words_data(session, force=False)
-        print(f"Done! Successfully seeded {total} words into database.")
+        logger.info("Seeded %s words into database", total)
     finally:
         session.close()
-
