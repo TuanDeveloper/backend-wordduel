@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.routers import words, auth, rooms, solo, library, admin, imports
+from app.routers import words, auth, rooms, solo, library, admin, imports, profile, social, matchmaking, rankings
 
 api_router = APIRouter()
 api_router.include_router(words.router, tags=["words"])
@@ -9,3 +9,7 @@ api_router.include_router(solo.router)
 api_router.include_router(library.router)
 api_router.include_router(admin.router)
 api_router.include_router(imports.router)
+api_router.include_router(profile.router)
+api_router.include_router(social.router)
+api_router.include_router(matchmaking.router)
+api_router.include_router(rankings.router)

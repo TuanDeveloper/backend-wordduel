@@ -2,10 +2,12 @@ import csv
 import io
 from pathlib import Path
 from typing import Any
+from zipfile import BadZipFile
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook, load_workbook
+from openpyxl.utils.exceptions import InvalidFileException
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
@@ -14,13 +16,13 @@ from app.dependencies.auth import get_current_user
 from app.dependencies.database import get_db
 from app.models.user import User
 from app.schemas.response import ResponseSchema
-from app.schemas.word import WordSetCreate
+from app.schemas.word import WordSetCreate, WordSetResponse
 from app.services.word_service import create_word_set
 
 router = APIRouter(prefix="/word-sets/import", tags=["word-sets"])
 MAX_FILE_BYTES = 5 * 1024 * 1024
 MAX_ROWS = 500
-REQUIRED_HEADERS = {"word", "definition", "example"}
+REQUIRED_HEADERS = {"word", "definition"}
 
 
 def _cell_text(value: Any) -> str:
@@ -36,7 +38,15 @@ def _read_rows(filename: str, content: bytes) -> tuple[list[dict[str, str]], lis
 
     try:
         if extension == ".csv":
-            text = content.decode("utf-8-sig")
+            text = None
+            for encoding in ("utf-8-sig", "utf-16", "cp1258", "cp1252"):
+                try:
+                    text = content.decode(encoding)
+                    break
+                except UnicodeDecodeError:
+                    continue
+            if text is None:
+                raise UnicodeDecodeError("csv", content, 0, len(content), "Unsupported text encoding")
             try:
                 dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t")
             except csv.Error:
@@ -46,7 +56,7 @@ def _read_rows(filename: str, content: bytes) -> tuple[list[dict[str, str]], lis
             workbook = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
             values = list(workbook.active.iter_rows(values_only=True))
             workbook.close()
-    except (UnicodeDecodeError, csv.Error, ValueError, OSError) as exc:
+    except (UnicodeDecodeError, csv.Error, ValueError, OSError, BadZipFile, InvalidFileException, KeyError) as exc:
         raise BadRequestError("Không thể đọc tệp. Hãy kiểm tra lại định dạng.") from exc
     if not values:
         raise BadRequestError("Tệp không có dòng tiêu đề")
@@ -58,7 +68,7 @@ def _read_rows(filename: str, content: bytes) -> tuple[list[dict[str, str]], lis
     if missing_headers:
         raise BadRequestError(
             "Thiếu cột bắt buộc: " + ", ".join(sorted(missing_headers)),
-            details={"required_columns": ["word", "definition", "example"], "found_columns": headers},
+            details={"required_columns": ["word", "definition"], "optional_columns": ["example", "context_sentence"], "found_columns": headers},
         )
     index = {header: headers.index(header) for header in ("word", "definition", "example", "context_sentence") if header in headers}
     valid: list[dict[str, str]] = []
@@ -121,12 +131,22 @@ async def import_word_set(
     if not rows:
         raise BadRequestError("Không có dòng hợp lệ để tạo bộ từ", details={"errors": errors})
     try:
-        request = WordSetCreate.model_validate({"title": title.strip(), "description": description, "words": rows})
+        word_rows = [
+            {
+                "term": row["word"],
+                "definition": row["definition"],
+                "example": row.get("example") or None,
+                "context_sentence": row.get("context_sentence") or None,
+            }
+            for row in rows
+        ]
+        request = WordSetCreate.model_validate({"title": title.strip(), "description": description, "words": word_rows})
     except ValidationError as exc:
         raise BadRequestError("Dữ liệu trong tệp vượt quá giới hạn trường", details=exc.errors()) from exc
     word_set = create_word_set(db, request, current_user.id)
+    word_set_data = WordSetResponse.model_validate(word_set).model_dump(mode="json")
     return ResponseSchema(
-        data={"word_set": word_set, "imported_count": len(rows), "errors": errors},
+        data={"word_set": word_set_data, "imported_count": len(rows), "errors": errors},
         message=f"Đã tạo bộ từ với {len(rows)} từ hợp lệ",
     )
 

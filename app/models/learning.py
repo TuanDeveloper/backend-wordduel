@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import relationship
 
 from app.db.base import Base
@@ -16,6 +16,7 @@ class SoloSession(Base):
     word_count = Column(Integer, nullable=False)
     question_count = Column(Integer, nullable=False)
     time_per_question = Column(Integer, nullable=True)
+    game_mode = Column(String(32), nullable=False, default="classic", server_default="classic")
     question_word_ids = Column(Text, nullable=False)
     status = Column(String(20), nullable=False, default="playing", server_default="playing")
     started_at = Column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
@@ -54,3 +55,29 @@ class SavedWord(Base):
 
     user = relationship("User", back_populates="saved_words")
     word = relationship("Word", back_populates="saved_entries")
+
+
+class FriendRequest(Base):
+    __tablename__ = "friend_requests"
+    __table_args__ = (UniqueConstraint("requester_id", "recipient_id", name="uq_friend_request_pair"),)
+
+    id = Column(Integer, primary_key=True)
+    requester_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    recipient_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    status = Column(String(20), nullable=False, default="pending", server_default="pending")
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow, server_default=func.now())
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id = Column(Integer, primary_key=True)
+    recipient_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    actor_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    notification_type = Column(String(32), nullable=False)
+    title = Column(String(160), nullable=False)
+    body = Column(String(500), nullable=False, default="")
+    payload = Column(JSON, nullable=False, default=dict)
+    is_read = Column(Boolean, nullable=False, default=False, server_default="false", index=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, server_default=func.now())

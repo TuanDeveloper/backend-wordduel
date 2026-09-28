@@ -1,5 +1,6 @@
 import json
 import random
+from difflib import SequenceMatcher
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, status
@@ -14,7 +15,7 @@ from app.models.user import User
 from app.models.word import Word, WordSet
 from app.schemas.response import ResponseSchema
 from app.schemas.room import SoloStartRequest, SoloSubmitRequest
-from app.services.game_service import _mask_context
+from app.services.game_service import _public_question, _grade_answer
 
 router = APIRouter(prefix="/solo", tags=["solo"])
 
@@ -34,14 +35,16 @@ def _session_state(db: Session, session: SoloSession) -> dict:
         word.id: word
         for word in db.query(Word).filter(Word.id.in_(set(question_word_ids))).all()
     }
+    if session.word_set_id:
+        distractors = [row[0] for row in db.query(Word.term).filter(Word.word_set_id == session.word_set_id).all()]
+    else:
+        distractors = [row[0] for row in db.query(Word.term).join(SavedWord, SavedWord.word_id == Word.id).filter(SavedWord.user_id == session.user_id).all()]
     words = [
-        {
-            "id": words_by_id[word_id].id,
-            "definition": words_by_id[word_id].definition,
-            "context_sentence": _mask_context(
-                words_by_id[word_id].context_sentence, words_by_id[word_id].term
-            ),
-        }
+        _public_question(
+            words_by_id[word_id],
+            session.game_mode,
+            [term for term in distractors if term != words_by_id[word_id].term],
+        )
         for word_id in question_word_ids
         if word_id in words_by_id
     ]
@@ -56,15 +59,21 @@ def _session_state(db: Session, session: SoloSession) -> dict:
         "word_count": session.word_count,
         "question_count": session.question_count,
         "time_per_question": session.time_per_question,
+        "game_mode": session.game_mode,
         "words": words,
         "answers": [
             {
                 "question_index": answer.question_index,
                 "word_id": answer.word_id,
                 "user_answer": answer.submitted_answer,
-                "is_correct": answer.is_correct,
+            "is_correct": answer.is_correct,
+            "near_match": not answer.is_correct and session.game_mode in ("speak", "reverse") and SequenceMatcher(
+                None,
+                " ".join((answer.submitted_answer or "").casefold().split()),
+                " ".join(((answer.word.definition if session.game_mode == "reverse" else answer.word.term) if answer.word else "").casefold().split()),
+            ).ratio() >= 0.52,
                 "response_time_ms": answer.response_time_ms,
-                "correct_answer": answer.word.term if answer.word else "",
+                "correct_answer": (answer.word.definition if session.game_mode == "reverse" else answer.word.term) if answer.word else "",
             }
             for answer in answers
         ],
@@ -120,6 +129,7 @@ def start_solo(
         word_count=len(selected_ids),
         question_count=question_count,
         time_per_question=request.time_per_question,
+        game_mode=request.game_mode,
         question_word_ids=json.dumps(question_ids),
         status="playing",
     )
@@ -159,7 +169,25 @@ def submit_solo_answer(
     word = db.query(Word).filter(Word.id == request.word_id).first()
     if not word:
         raise NotFoundError("Từ vựng không còn tồn tại")
-    correct = request.submitted_answer.strip().casefold() == word.term.strip().casefold()
+    correct, near_match, correct_answer = _grade_answer(session.game_mode, word, request.submitted_answer.strip())
+    if near_match:
+        return ResponseSchema(
+            data={
+                "event": "answer_feedback",
+                "session_id": session.id,
+                "question_index": request.question_index,
+                "word_id": word.id,
+                "user_answer": request.submitted_answer.strip(),
+                "is_correct": False,
+                "near_match": True,
+                "retryable": True,
+                "correct_answer": correct_answer,
+                "game_mode": session.game_mode,
+                "response_time_ms": request.response_time_ms,
+                "state": _session_state(db, session),
+            },
+            message="Gần đúng, hãy thử phát âm lại",
+        )
     answer = SoloSubmission(
         session_id=session.id,
         word_id=word.id,
@@ -188,7 +216,9 @@ def submit_solo_answer(
             "word_id": word.id,
             "user_answer": answer.submitted_answer,
             "is_correct": correct,
-            "correct_answer": word.term,
+            "correct_answer": correct_answer,
+            "near_match": near_match,
+            "game_mode": session.game_mode,
             "response_time_ms": answer.response_time_ms,
             "state": _session_state(db, session),
         },

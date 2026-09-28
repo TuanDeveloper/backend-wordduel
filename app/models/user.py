@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Boolean, Column, Integer, String, DateTime
+from sqlalchemy import Boolean, Column, Integer, String, DateTime, JSON
 from sqlalchemy.orm import relationship
 
 from app.db.base import Base
@@ -15,6 +15,11 @@ class User(Base):
     password_hash = Column(String(255), nullable=False)
     role = Column(String(20), nullable=False, default="user", server_default="user")
     is_active = Column(Boolean, nullable=False, default=True, server_default="true")
+    avatar_key = Column(String(32), nullable=False, default="spark", server_default="spark")
+    preferences = Column(JSON, nullable=False, default=dict, server_default="{}")
+    rating = Column(Integer, nullable=False, default=1000, server_default="1000")
+    rated_games = Column(Integer, nullable=False, default=0, server_default="0")
+    wins = Column(Integer, nullable=False, default=0, server_default="0")
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # Relationships

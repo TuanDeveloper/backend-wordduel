@@ -1676,6 +1676,342 @@ SEED_WORD_SETS: list[dict[str, Any]] = [
       "example": "The result was better than expected."
     }
   ]
+},
+{
+  "title": "Thanh Trường 2",
+  "description": "Danh sách từ vựng được trích xuất từ tệp 2.xlsx",
+  "words": [
+    {
+      "term": "explicitly shown",
+      "definition": "được thể hiện rõ ràng",
+      "example": ""
+    },
+    {
+      "term": "interactive",
+      "definition": "có tính tương tác",
+      "example": ""
+    },
+    {
+      "term": "forbidden",
+      "definition": "cấm",
+      "example": ""
+    },
+    {
+      "term": "permission",
+      "definition": "sự cho phép",
+      "example": ""
+    },
+    {
+      "term": "Nonslip",
+      "definition": "Chống trượt",
+      "example": ""
+    },
+    {
+      "term": "as far as practicable",
+      "definition": "trong phạm vi có thể thực hiện được",
+      "example": ""
+    },
+    {
+      "term": "Intermittent",
+      "definition": "không liên tục",
+      "example": ""
+    },
+    {
+      "term": "Staggered",
+      "definition": "so le",
+      "example": ""
+    },
+    {
+      "term": "Staggered Intermittent Weld",
+      "definition": "mối hàn gián đoạn so le",
+      "example": ""
+    },
+    {
+      "term": "pasta",
+      "definition": "mi ong",
+      "example": ""
+    },
+    {
+      "term": "mushroom",
+      "definition": "nấm",
+      "example": ""
+    },
+    {
+      "term": "It was on time today.",
+      "definition": "hôm nay nó đã đến đúng giờ",
+      "example": ""
+    },
+    {
+      "term": "I take the subway",
+      "definition": "t di tau dien ngam",
+      "example": ""
+    },
+    {
+      "term": "How have you been?",
+      "definition": "Dạo này bạn thế nào?",
+      "example": ""
+    },
+    {
+      "term": "catch up more often",
+      "definition": "gặp gỡ, trò chuyện thường xuyên hơn",
+      "example": ""
+    },
+    {
+      "term": "have plenty of time",
+      "definition": "còn nhiều thời gian",
+      "example": ""
+    },
+    {
+      "term": "I used to have",
+      "definition": "tôi đã từng có",
+      "example": ""
+    },
+    {
+      "term": "elementary school",
+      "definition": "trường tiểu học",
+      "example": ""
+    },
+    {
+      "term": "my nieces",
+      "definition": "các cháu gái của tôi",
+      "example": ""
+    },
+    {
+      "term": "has to be taken",
+      "definition": "cần phải được thực hiện",
+      "example": ""
+    },
+    {
+      "term": "A Coincidence",
+      "definition": "Một sự trùng hợp ngẫu nhiên thôi.",
+      "example": ""
+    },
+    {
+      "term": "gave birth to a baby girl",
+      "definition": "Đã hạ sinh một bé gái.",
+      "example": ""
+    },
+    {
+      "term": "Was it natural childbirth?",
+      "definition": "Sinh thường phải không?",
+      "example": ""
+    },
+    {
+      "term": "she had to have a caesarean.",
+      "definition": "cô ấy đã phải sinh mổ.",
+      "example": ""
+    },
+    {
+      "term": "That's a shame",
+      "definition": "Thật đáng tiếc.",
+      "example": ""
+    },
+    {
+      "term": "suffering",
+      "definition": "đau khổ",
+      "example": ""
+    },
+    {
+      "term": "surgery",
+      "definition": "phẫu thuật",
+      "example": ""
+    },
+    {
+      "term": "will be clarified.",
+      "definition": "sẽ được làm rõ.",
+      "example": ""
+    },
+    {
+      "term": "goes through once more",
+      "definition": "xem xét lại một lần nữa",
+      "example": ""
+    },
+    {
+      "term": "to eliminate the design mistakes.",
+      "definition": "để loại bỏ các sai sót trong thiết kế.",
+      "example": ""
+    },
+    {
+      "term": "adjacent sections.",
+      "definition": "các phần liền kề.",
+      "example": ""
+    },
+    {
+      "term": "immediately informed",
+      "definition": "được thông báo ngay lập tức",
+      "example": ""
+    },
+    {
+      "term": "distortion",
+      "definition": "sự biến dạng",
+      "example": ""
+    },
+    {
+      "term": "conveyer",
+      "definition": "băng tải",
+      "example": ""
+    },
+    {
+      "term": "Restrictions",
+      "definition": "Các hạn chế",
+      "example": ""
+    },
+    {
+      "term": "trapezoid",
+      "definition": "hình thang",
+      "example": ""
+    },
+    {
+      "term": "tilting angle",
+      "definition": "góc nghiêng",
+      "example": ""
+    },
+    {
+      "term": "bad sore throat.",
+      "definition": "Đau họng nghiêm trọng.",
+      "example": ""
+    },
+    {
+      "term": "pack my stuff",
+      "definition": "Thu dọn đồ đạc của mình.",
+      "example": ""
+    },
+    {
+      "term": "I had to pack my stuff for my trip.",
+      "definition": "T phải thu xếp đồ đạc cho chuyến đi của mình.",
+      "example": ""
+    },
+    {
+      "term": "Recruit",
+      "definition": "tuyển dụng",
+      "example": ""
+    },
+    {
+      "term": "I thought that movie was terrific",
+      "definition": "Tôi nghĩ bộ phim đó thật tuyệt",
+      "example": ""
+    },
+    {
+      "term": "It seems that you expect",
+      "definition": "Có vẻ như bạn đang kỳ vọng điều gì đó.",
+      "example": ""
+    },
+    {
+      "term": "intellectual stimulation",
+      "definition": "Kích thích trí tuệ",
+      "example": ""
+    },
+    {
+      "term": "central theme",
+      "definition": "Chủ đề trung tâm",
+      "example": ""
+    },
+    {
+      "term": "She needs to rush.",
+      "definition": "Cô ấy cần phải nhanh lên.",
+      "example": ""
+    },
+    {
+      "term": "Perhaps",
+      "definition": "có lẽ",
+      "example": ""
+    },
+    {
+      "term": "pendants.",
+      "definition": "mặt dây chuyền.",
+      "example": ""
+    },
+    {
+      "term": "necklace",
+      "definition": "vòng cổ",
+      "example": ""
+    },
+    {
+      "term": "bracelets",
+      "definition": "vòng tay",
+      "example": ""
+    },
+    {
+      "term": "You were speeding",
+      "definition": "Ban đã chạy quá tốc độ",
+      "example": ""
+    },
+    {
+      "term": "appointment",
+      "definition": "cuoc hen",
+      "example": ""
+    },
+    {
+      "term": "drugstore",
+      "definition": "hiệu thuốc",
+      "example": ""
+    },
+    {
+      "term": "packages",
+      "definition": "gói hàng",
+      "example": ""
+    },
+    {
+      "term": "demanding",
+      "definition": "su doi hoi/ yeu cau",
+      "example": ""
+    },
+    {
+      "term": "thoughtful",
+      "definition": "chu đáo",
+      "example": ""
+    },
+    {
+      "term": "I wish you the best of luck.",
+      "definition": "tôi chúc bạn những điều may mắn nhất.",
+      "example": ""
+    },
+    {
+      "term": "That's silly",
+      "definition": "Thật ngớ ngẩn",
+      "example": ""
+    },
+    {
+      "term": "This is a nice flat.",
+      "definition": "Đây là một căn hộ đẹp.",
+      "example": ""
+    },
+    {
+      "term": "a bidet",
+      "definition": "bồn cầu tự rửa",
+      "example": ""
+    },
+    {
+      "term": "jealous",
+      "definition": "ghen tị",
+      "example": ""
+    },
+    {
+      "term": "briefcase",
+      "definition": "Va li công tác",
+      "example": ""
+    },
+    {
+      "term": "It keeps me awake.",
+      "definition": "Nó khiến tôi khó ngủ.",
+      "example": ""
+    },
+    {
+      "term": "robe",
+      "definition": "áo choàng",
+      "example": ""
+    },
+    {
+      "term": "passage",
+      "definition": "đoạn văn",
+      "example": ""
+    },
+    {
+      "term": "traffic wardens",
+      "definition": "cảnh sát giao thông",
+      "example": ""
+    }
+  ]
 }
 ]
 

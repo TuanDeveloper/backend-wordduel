@@ -22,6 +22,8 @@ def generate_room_code(db: Session, length: int = 6) -> str:
 
 
 def get_room_by_code(db: Session, code: str) -> Room:
+    if not code or len(code) > 10 or not code.isascii() or not code.isalnum():
+        raise NotFoundError("Không tìm thấy phòng chơi với mã này")
     room = (
         db.query(Room)
         .options(joinedload(Room.players).joinedload(RoomPlayer.user))
@@ -34,10 +36,11 @@ def get_room_by_code(db: Session, code: str) -> Room:
 
 
 def create_room(db: Session, room_in: RoomCreate, host_id: int) -> Room:
-    word_set = db.query(WordSet).filter(WordSet.id == room_in.word_set_id, WordSet.is_hidden.is_(False)).first()
-    if not word_set:
+    word_set_ids = room_in.word_set_ids or [room_in.word_set_id]
+    word_sets = db.query(WordSet).filter(WordSet.id.in_(word_set_ids), WordSet.is_hidden.is_(False)).all()
+    if len(word_sets) != len(word_set_ids):
         raise NotFoundError("Bộ từ vựng không tồn tại")
-    available_words = db.query(func.count(Word.id)).filter(Word.word_set_id == word_set.id).scalar() or 0
+    available_words = db.query(func.count(Word.id)).filter(Word.word_set_id.in_(word_set_ids)).scalar() or 0
     if not available_words:
         raise BadRequestError("Bộ từ vựng chưa có từ nào")
     word_count = min(room_in.word_count or available_words, available_words, 500)
@@ -49,10 +52,14 @@ def create_room(db: Session, room_in: RoomCreate, host_id: int) -> Room:
         room = Room(
             code=code,
             host_id=host_id,
-            word_set_id=room_in.word_set_id,
+            word_set_id=word_set_ids[0],
+            word_set_ids=word_set_ids,
+            points_per_correct=room_in.points_per_correct,
             word_count=word_count,
             time_per_question=room_in.time_per_question,
             question_count=question_count,
+            game_mode=room_in.game_mode,
+            board_game_mode=room_in.board_game_mode,
             status="waiting",
         )
         db.add(room)

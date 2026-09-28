@@ -19,6 +19,7 @@ class ConnectionManager:
 
     def __init__(self) -> None:
         self._rooms: dict[str, list[tuple[WebSocket, int]]] = {}
+        self._users: dict[int, list[WebSocket]] = {}
         self._instance_id = str(uuid4())
         self._redis: Redis | None = None
         self._listener_task: asyncio.Task | None = None
@@ -33,6 +34,50 @@ class ConnectionManager:
         await websocket.accept(subprotocol=subprotocol)
         self._rooms.setdefault(room_code, []).append((websocket, user_id))
         self._ensure_listener()
+
+    async def connect_user(self, websocket: WebSocket, user_id: int, subprotocol: str = "wordduel") -> bool:
+        await websocket.accept(subprotocol=subprotocol)
+        was_online = bool(self._users.get(user_id))
+        self._users.setdefault(user_id, []).append(websocket)
+        self._ensure_listener()
+        return not was_online
+
+    def disconnect_user(self, websocket: WebSocket, user_id: int) -> bool:
+        connections = self._users.get(user_id, [])
+        remaining = [connection for connection in connections if connection is not websocket]
+        if remaining:
+            self._users[user_id] = remaining
+            return False
+        self._users.pop(user_id, None)
+        return True
+
+    async def broadcast_user(self, user_id: int, payload: Any) -> None:
+        await self._broadcast_user_local(user_id, payload)
+        self._ensure_listener()
+        if self._redis is None:
+            return
+        envelope = json.dumps(
+            {"origin": self._instance_id, "target_user_id": user_id, "payload": payload},
+            ensure_ascii=False,
+        )
+        try:
+            await self._redis.publish(self.CHANNEL, envelope)
+        except Exception:
+            logger.warning("Redis Pub/Sub user notification failed; keeping delivery local", exc_info=True)
+
+    async def _broadcast_user_local(self, user_id: int, payload: Any) -> None:
+        message = json.dumps(payload, ensure_ascii=False)
+        dead: list[WebSocket] = []
+        for websocket in list(self._users.get(user_id, [])):
+            try:
+                await websocket.send_text(message)
+            except Exception:
+                dead.append(websocket)
+        for websocket in dead:
+            self.disconnect_user(websocket, user_id)
+
+    def user_is_online(self, user_id: int) -> bool:
+        return bool(self._users.get(user_id))
 
     def disconnect(self, websocket: WebSocket, room_code: str) -> None:
         connections = self._rooms.get(room_code)
@@ -75,7 +120,7 @@ class ConnectionManager:
     def _ensure_listener(self) -> None:
         try:
             if self._redis is None:
-                self._redis = Redis.from_url(settings.REDIS_URL, decode_responses=True)
+                self._redis = Redis.from_url(settings.redis_connection_url, decode_responses=True)
         except Exception:
             logger.warning("Redis Pub/Sub is unavailable; broadcasts remain local", exc_info=True)
             return
@@ -94,7 +139,10 @@ class ConnectionManager:
                         continue
                     envelope = json.loads(message["data"])
                     if envelope.get("origin") != self._instance_id:
-                        await self._broadcast_local(envelope["room_code"], envelope["payload"])
+                        if "target_user_id" in envelope:
+                            await self._broadcast_user_local(int(envelope["target_user_id"]), envelope["payload"])
+                        else:
+                            await self._broadcast_local(envelope["room_code"], envelope["payload"])
             except asyncio.CancelledError:
                 raise
             except Exception:

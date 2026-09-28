@@ -3,6 +3,7 @@
 from datetime import datetime
 import random
 import re
+from difflib import SequenceMatcher
 from typing import Any
 
 from sqlalchemy import case, func
@@ -35,22 +36,54 @@ def _question_sequence(word_ids: list[int], question_count: int) -> list[int]:
 def _mask_context(sentence: str | None, term: str) -> str | None:
     if not sentence:
         return None
-    pattern = re.compile(re.escape(term), re.IGNORECASE)
-    return pattern.sub("_____", sentence)
+    pattern = re.compile(rf"\b{re.escape(term)}\b", re.IGNORECASE)
+    masked, replacements = pattern.subn("_____", sentence, count=1)
+    return masked if replacements else None
 
 
-def _public_words(db: Session, question_word_ids: list[int]) -> list[dict[str, Any]]:
+def _public_question(word: Word, game_mode: str, distractors: list[str] | None = None) -> dict[str, Any]:
+    question: dict[str, Any] = {
+        "id": word.id,
+        "definition": word.definition,
+        "context_sentence": _mask_context(word.context_sentence or word.example, word.term),
+    }
+    if game_mode == "reverse":
+        question["term"] = word.term
+    elif game_mode in ("multiple_choice", "listen_choice"):
+        rng = random.Random(word.id)
+        wrong_options = sorted({term for term in (distractors or []) if term and term != word.term})
+        choices = rng.sample(wrong_options, min(3, len(wrong_options)))
+        choices.append(word.term)
+        rng.shuffle(choices)
+        question["choices"] = choices
+        if game_mode == "listen_choice":
+            question["term"] = word.term
+    elif game_mode in ("listen_spelling", "speak"):
+        question["term"] = word.term
+    return question
+
+
+def _public_words(db: Session, question_word_ids: list[int], game_mode: str = "classic", word_set_ids: list[int] | int | None = None) -> list[dict[str, Any]]:
     rows = db.query(Word).filter(Word.id.in_(set(question_word_ids))).all()
     by_id = {word.id: word for word in rows}
+    set_ids = [word_set_ids] if isinstance(word_set_ids, int) else (word_set_ids or [])
+    distractors = [row[0] for row in db.query(Word.term).filter(Word.word_set_id.in_(set_ids)).all()] if set_ids else [word.term for word in rows]
     return [
-        {
-            "id": by_id[word_id].id,
-            "definition": by_id[word_id].definition,
-            "context_sentence": _mask_context(by_id[word_id].context_sentence, by_id[word_id].term),
-        }
+        _public_question(by_id[word_id], game_mode, [term for term in distractors if term != by_id[word_id].term])
         for word_id in question_word_ids
         if word_id in by_id
     ]
+
+
+def _grade_answer(game_mode: str, word: Word, submitted_answer: str) -> tuple[bool, bool, str]:
+    expected = word.definition if game_mode == "reverse" else word.term
+    submitted = " ".join(re.sub(r"[^\w\s'-]", "", submitted_answer.casefold()).split())
+    target = " ".join(re.sub(r"[^\w\s'-]", "", expected.casefold()).split())
+    if game_mode in ("speak", "reverse"):
+        similarity = SequenceMatcher(None, submitted, target).ratio() if submitted else 0
+        accepted = similarity >= (0.76 if game_mode == "speak" else 0.78)
+        return accepted, not accepted and similarity >= 0.52, expected
+    return bool(submitted) and submitted == target, False, expected
 
 
 def _leaderboard(room: Room) -> tuple[list[dict[str, Any]], RoomPlayer | None]:
@@ -70,15 +103,20 @@ def _leaderboard(room: Room) -> tuple[list[dict[str, Any]], RoomPlayer | None]:
     return leaderboard, players_sorted[0] if players_sorted else None
 
 
-def _finish_payload(room: Room) -> dict[str, Any]:
+def _finish_payload(room: Room, db: Session | None = None) -> dict[str, Any]:
     leaderboard, winner = _leaderboard(room)
-    return {
+    payload = {
         "event": "game_finished",
         "room_code": room.code,
         "winner_user_id": winner.user_id if winner else None,
         "winner_username": winner.user.username if winner and winner.user else None,
         "leaderboard": leaderboard,
+        "total_questions": room.question_count or len(room.question_word_ids or []),
     }
+    if db is not None and room.question_word_ids:
+        words = db.query(Word).filter(Word.id.in_(set(room.question_word_ids))).order_by(Word.id).all()
+        payload["words"] = [{"id": word.id, "term": word.term, "definition": word.definition} for word in words]
+    return payload
 
 
 def start_game(db: Session, room_code: str, user_id: int) -> dict[str, Any]:
@@ -91,10 +129,15 @@ def start_game(db: Session, room_code: str, user_id: int) -> dict[str, Any]:
         raise BadRequestError("Phòng không ở trạng thái chờ")
 
     players = db.query(RoomPlayer).filter(RoomPlayer.room_id == room.id).populate_existing().all()
+    if room.board_game_mode:
+        from app.services import board_service
+
+        return board_service.start_board_game(db, room, players)
     if len(players) < 2 or any(not player.is_ready for player in players):
         raise BadRequestError("Cần ít nhất hai người chơi và tất cả phải sẵn sàng")
 
-    words = db.query(Word).filter(Word.word_set_id == room.word_set_id).order_by(Word.id).all()
+    word_set_ids = room.word_set_ids or [room.word_set_id]
+    words = db.query(Word).filter(Word.word_set_id.in_(word_set_ids)).order_by(Word.id).all()
     if not words:
         raise BadRequestError("Bộ từ vựng này chưa có từ nào")
 
@@ -102,7 +145,7 @@ def start_game(db: Session, room_code: str, user_id: int) -> dict[str, Any]:
     selected_words = random.sample(words, selected_count)
     question_count = room.question_count or selected_count
     question_word_ids = _question_sequence([word.id for word in selected_words], question_count)
-    public_word_data = _public_words(db, question_word_ids)
+    public_word_data = _public_words(db, question_word_ids, room.game_mode, word_set_ids)
     player_ids = [player.user_id for player in players]
 
     room.word_count = selected_count
@@ -116,8 +159,10 @@ def start_game(db: Session, room_code: str, user_id: int) -> dict[str, Any]:
         "event": "game_started",
         "room_code": room_code,
         "word_set_id": room.word_set_id,
+        "word_set_ids": word_set_ids,
         "total_words": len(question_word_ids),
         "time_per_question": room.time_per_question,
+        "game_mode": room.game_mode,
         "words": public_word_data,
         "players": player_ids,
     }
@@ -137,12 +182,17 @@ def get_game_state(db: Session, room_code: str, user_id: int) -> dict[str, Any]:
     if room.status == "waiting":
         return {"event": "game_waiting", "room_code": room_code, "status": room.status, "host_id": room.host_id}
     if room.status == "finished":
-        return _finish_payload(room)
+        return _finish_payload(room, db)
+
+    if room.board_game_mode:
+        from app.services import board_service
+
+        return board_service.get_board_state(db, room, user_id)
 
     question_word_ids = room.question_word_ids
     if not question_word_ids:
-        question_word_ids = [row[0] for row in db.query(Word.id).filter(Word.word_set_id == room.word_set_id).order_by(Word.id).all()]
-    words = _public_words(db, question_word_ids)
+        question_word_ids = [row[0] for row in db.query(Word.id).filter(Word.word_set_id.in_(room.word_set_ids or [room.word_set_id])).order_by(Word.id).all()]
+    words = _public_words(db, question_word_ids, room.game_mode, room.word_set_ids or [room.word_set_id])
     answered_question_indices = [
         row[0]
         for row in db.query(Submission.question_index)
@@ -155,8 +205,10 @@ def get_game_state(db: Session, room_code: str, user_id: int) -> dict[str, Any]:
         "event": "game_started",
         "room_code": room_code,
         "word_set_id": room.word_set_id,
+        "word_set_ids": room.word_set_ids or [room.word_set_id],
         "total_words": len(question_word_ids),
         "time_per_question": room.time_per_question,
+        "game_mode": room.game_mode,
         "words": words,
         "answered_question_indices": answered_question_indices,
         "players": progress,
@@ -183,13 +235,25 @@ def submit_answer(
     question_word_ids = room.question_word_ids or []
     if question_index < 0 or question_index >= len(question_word_ids) or question_word_ids[question_index] != word_id:
         raise BadRequestError("Câu hỏi không nằm trong ván đấu hiện tại")
-    word = db.query(Word).filter(Word.id == word_id, Word.word_set_id == room.word_set_id).first()
+    word = db.query(Word).filter(Word.id == word_id, Word.word_set_id.in_(room.word_set_ids or [room.word_set_id])).first()
     if not word:
         raise NotFoundError("Từ này không thuộc bộ từ của phòng")
 
-    clean_submitted = submitted_answer.strip().casefold()
-    is_correct = clean_submitted == word.term.strip().casefold()
-    correct_answer = word.term
+    is_correct, near_match, correct_answer = _grade_answer(room.game_mode, word, submitted_answer.strip())
+    if near_match:
+        return {
+            "event": "answer_feedback",
+            "room_code": room_code,
+            "word_id": word_id,
+            "question_index": question_index,
+            "user_answer": submitted_answer.strip(),
+            "is_correct": False,
+            "near_match": True,
+            "retryable": True,
+            "correct_answer": correct_answer,
+            "game_mode": room.game_mode,
+            "players": _get_all_progress(db, room),
+        }
     submission = Submission(
         room_id=room.id,
         user_id=user_id,
@@ -200,7 +264,7 @@ def submit_answer(
     )
     db.add(submission)
     if is_correct:
-        player.score += 1
+        player.score += room.points_per_correct or 0
 
     try:
         # The database uniqueness constraint is the final guard against concurrent duplicates.
@@ -225,7 +289,9 @@ def submit_answer(
         "question_index": question_index,
         "user_answer": submitted_answer.strip(),
         "is_correct": is_correct,
+        "near_match": near_match,
         "correct_answer": correct_answer,
+        "game_mode": room.game_mode,
         "players": players_progress,
     }
 
@@ -287,6 +353,9 @@ def finish_game(db: Session, room_code: str, user_id: int) -> dict[str, Any]:
     if room.status != "finished":
         room.status = "finished"
         room.finished_at = datetime.utcnow()
+        from app.services.ranking_service import apply_room_result
+
+        apply_room_result(db, room)
         db.commit()
 
     room = (
@@ -296,5 +365,5 @@ def finish_game(db: Session, room_code: str, user_id: int) -> dict[str, Any]:
         .populate_existing()
         .first()
     )
-    payload = _finish_payload(room)
+    payload = _finish_payload(room, db)
     return payload

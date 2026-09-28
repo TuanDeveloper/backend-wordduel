@@ -12,8 +12,9 @@ from app.dependencies.database import get_db
 from app.models.room import Room, RoomPlayer
 from app.models.user import User
 from app.schemas.response import ResponseSchema
-from app.schemas.room import RoomCreate, RoomResponse, SubmitRequest
+from app.schemas.room import BoardActionRequest, RoomCreate, RoomResponse, RoomSettingsUpdate, SubmitRequest
 from app.services import game_service, room_service
+from app.services.social_service import notify_friends_activity
 from app.websockets.connection_manager import manager
 
 router = APIRouter()
@@ -42,7 +43,6 @@ def _room_players(room: Room) -> list[dict]:
             "score": player.score,
             "is_ready": player.is_ready,
             "is_host": player.user_id == room.host_id,
-            "is_host": player.user_id == room.host_id,
         }
         for player in room.players
     ]
@@ -56,6 +56,33 @@ def create_room(
 ) -> ResponseSchema[RoomResponse]:
     room = room_service.create_room(db, room_in=room_in, host_id=current_user.id)
     return ResponseSchema(data=room, message="Tạo phòng chơi thành công")
+
+
+@router.get("/mine/active", response_model=ResponseSchema[list[dict]])
+def get_my_active_rooms(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ResponseSchema[list[dict]]:
+    """List waiting/playing rooms the user can resume after reconnecting."""
+    rooms = (
+        db.query(Room)
+        .join(RoomPlayer, RoomPlayer.room_id == Room.id)
+        .filter(RoomPlayer.user_id == current_user.id, Room.status.in_(("waiting", "playing")))
+        .order_by(Room.created_at.desc())
+        .all()
+    )
+    data = [
+        {
+            "code": room.code,
+            "status": room.status,
+            "game_mode": room.game_mode,
+            "board_game_mode": room.board_game_mode,
+            "created_at": room.created_at,
+            "player_count": len(room.players),
+        }
+        for room in rooms
+    ]
+    return ResponseSchema(data=data, message="Lấy các phòng đang tham gia thành công")
 
 
 @router.get("/{code}", response_model=ResponseSchema[RoomResponse])
@@ -101,6 +128,48 @@ async def leave_room(
         raise BadRequestError("Phòng chơi không còn tồn tại")
     player = _require_room_member(db, room, current_user.id)
     was_host = room.host_id == current_user.id
+
+    other_players = (db.query(RoomPlayer)
+        .filter(RoomPlayer.room_id == room.id, RoomPlayer.user_id != current_user.id)
+        .order_by(RoomPlayer.joined_at.asc(), RoomPlayer.id.asc())
+        .all())
+
+    # A competitive match cannot remain in `playing` with fewer than two
+    # participants. Keep the leaver's player row as match history, finish once,
+    # and let the remaining player receive the result screen.
+    if room.status == "playing" and len(other_players) < 2:
+        from datetime import datetime
+        from app.services.game_service import _finish_payload
+        from app.services.ranking_service import apply_room_result
+
+        room.status = "finished"
+        room.finished_at = datetime.utcnow()
+        if room.board_game_mode and room.board_state:
+            board_state = room.board_state
+            if room.board_game_mode == "territory":
+                for participant in [player, *other_players]:
+                    participant.score = sum(1 for owner in board_state.get("territories", {}).values() if owner == participant.user_id)
+            elif room.board_game_mode == "monopoly":
+                for participant in [player, *other_players]:
+                    participant.score = board_state.get("cash", {}).get(str(participant.user_id), 0) + 5 * sum(
+                        1 for owner in board_state.get("properties", {}).values() if owner == participant.user_id
+                    )
+            elif room.board_game_mode == "race":
+                for participant in [player, *other_players]:
+                    participant.score = board_state.get("positions", {}).get(str(participant.user_id), 0)
+        apply_room_result(db, room, [player, *other_players])
+        db.commit()
+        finished_room = room_service.get_room_by_code(db, code)
+        finish_data = _finish_payload(finished_room, db)
+        if finished_room.board_game_mode:
+            finish_data["board_game_mode"] = finished_room.board_game_mode
+        await manager.broadcast(code, finish_data)
+        await notify_friends_activity(db, [row.user_id for row in finished_room.players], "online")
+        return ResponseSchema(
+            data={"left": True, "closed": False, "finished": True, "host_id": room.host_id},
+            message="Đã rời phòng và kết thúc trận đấu",
+        )
+
     db.delete(player)
     db.flush()
     remaining = (
@@ -113,7 +182,15 @@ async def leave_room(
         db.delete(room)
         db.commit()
         await manager.broadcast(code, {"event": "room_closed", "reason": "empty", "players": []})
+        await notify_friends_activity(db, [current_user.id], "online")
         return ResponseSchema(data={"left": True, "closed": True}, message="Đã đóng phòng trống")
+
+    if room.board_game_mode and room.board_state:
+        state = dict(room.board_state)
+        state["defense_answers"] = {}
+        state["phase"] = "question"
+        state["turn_index"] = min(int(state.get("turn_index", 0)), len(remaining) - 1)
+        room.board_state = state
 
     if was_host:
         room.host_id = remaining[0].user_id
@@ -126,6 +203,7 @@ async def leave_room(
         "host_id": room.host_id,
         "players": _room_players(room),
     })
+    await notify_friends_activity(db, [current_user.id], "online")
     return ResponseSchema(data={"left": True, "closed": False, "host_id": room.host_id}, message="Đã rời phòng")
 
 
@@ -150,6 +228,26 @@ async def toggle_ready(
     return ResponseSchema(data={"is_ready": player.is_ready}, message="Cập nhật trạng thái sẵn sàng")
 
 
+@router.patch("/{code}/settings", response_model=ResponseSchema[RoomResponse])
+async def update_room_settings(
+    code: str,
+    settings_in: RoomSettingsUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ResponseSchema[RoomResponse]:
+    room = room_service.get_room_by_code(db, code)
+    if room.host_id != current_user.id:
+        raise ForbiddenError("Chỉ chủ phòng mới có thể chỉnh cấu hình")
+    if room.status != "waiting":
+        raise BadRequestError("Chỉ có thể chỉnh cấu hình khi phòng đang chờ")
+    for field in settings_in.model_fields_set:
+        setattr(room, field, getattr(settings_in, field))
+    db.commit()
+    room = room_service.get_room_by_code(db, code)
+    await manager.broadcast(code, {"event": "room_settings_updated", "room": RoomResponse.model_validate(room).model_dump(mode="json")})
+    return ResponseSchema(data=room, message="Đã cập nhật cấu hình phòng")
+
+
 @router.post("/{code}/start", response_model=ResponseSchema[dict])
 async def start_room_game(
     code: str,
@@ -158,6 +256,8 @@ async def start_room_game(
 ) -> ResponseSchema[dict]:
     game_data = game_service.start_game(db, room_code=code, user_id=current_user.id)
     await manager.broadcast(code, game_data)
+    started_room = room_service.get_room_by_code(db, code)
+    await notify_friends_activity(db, [player.user_id for player in started_room.players], "playing")
     return ResponseSchema(data=game_data, message="Bắt đầu trận đấu thành công")
 
 
@@ -180,6 +280,22 @@ async def submit_room_answer(
     return ResponseSchema(data=feedback, message="Nộp câu trả lời thành công")
 
 
+@router.post("/{code}/board/action", response_model=ResponseSchema[dict])
+async def board_game_action(
+    code: str,
+    request: BoardActionRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ResponseSchema[dict]:
+    from app.services import board_service
+
+    result = board_service.board_action(db, code, current_user.id, request.action, request.answer)
+    await manager.broadcast(code, {key: value for key, value in result.items() if key != "feedback"})
+    if result.get("event") == "game_finished" and isinstance(result.get("leaderboard"), list):
+        await notify_friends_activity(db, [row["user_id"] for row in result["leaderboard"]], "online")
+    return ResponseSchema(data=result, message="Đã cập nhật lượt chơi")
+
+
 @router.post("/{code}/finish", response_model=ResponseSchema[dict])
 async def finish_room_game(
     code: str,
@@ -188,6 +304,8 @@ async def finish_room_game(
 ) -> ResponseSchema[dict]:
     finish_data = game_service.finish_game(db, room_code=code, user_id=current_user.id)
     await manager.broadcast(code, finish_data)
+    finished_room = room_service.get_room_by_code(db, code)
+    await notify_friends_activity(db, [player.user_id for player in finished_room.players], "online")
     return ResponseSchema(data=finish_data, message="Kết thúc ván đấu")
 
 
@@ -231,7 +349,7 @@ async def handle_websocket_connection(websocket: WebSocket, code: str, db: Sessi
     await manager.connect(websocket, code, user_id, subprotocol="wordduel")
     try:
         await manager.broadcast(code, {
-            "event": "player_joined",
+            "event": "room_state",
             "user_id": user_id,
             "username": username,
             "players": _room_players(room),
@@ -280,6 +398,8 @@ async def handle_websocket_connection(websocket: WebSocket, code: str, db: Sessi
                 elif event == "start":
                     game_data = game_service.start_game(db, room_code=code, user_id=user_id)
                     await manager.broadcast(code, game_data)
+                    started_room = room_service.get_room_by_code(db, code)
+                    await notify_friends_activity(db, [player.user_id for player in started_room.players], "playing")
                 elif event == "submit":
                     word_id = message.get("word_id")
                     answer = message.get("answer", "")
@@ -302,6 +422,8 @@ async def handle_websocket_connection(websocket: WebSocket, code: str, db: Sessi
                 elif event == "finish":
                     finish_data = game_service.finish_game(db, room_code=code, user_id=user_id)
                     await manager.broadcast(code, finish_data)
+                    finished_room = room_service.get_room_by_code(db, code)
+                    await notify_friends_activity(db, [player.user_id for player in finished_room.players], "online")
             except BaseAPIException as exc:
                 await manager.send_personal(websocket, {"event": "error", "message": exc.message})
             except (ValueError, TypeError, json.JSONDecodeError):
